@@ -1,0 +1,133 @@
+name: Market Lens Daily Structured Archive
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: market-lens-daily-structured-archive
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out archive repository
+        uses: actions/checkout@v5
+        with:
+          path: archive
+          fetch-depth: 1
+
+      - name: Check out Market Lens structured state
+        uses: actions/checkout@v5
+        with:
+          repository: AviramDahan/market-lens-scanner
+          ref: main
+          path: source
+          fetch-depth: 1
+          sparse-checkout: |
+            agent_results/decisions
+            agent_results/summaries
+            agent_results/diagnostics
+            agent_results/runtime
+            agent_results/position_monitor
+            agent_results/capital_replay
+            agent_results/dashboard_snapshot.json
+            agent_results/telegram_notifications.jsonl
+            agent_tracker/market_lens_agent_portfolio_budget_100k.xlsx
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Test archive builder
+        working-directory: archive
+        run: python -m unittest discover -s tests -v
+
+      - name: Build verified structured archive
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(git -C source rev-parse HEAD)"
+          SHORT_SHA="${SOURCE_SHA:0:12}"
+          ARCHIVE_DATE="$(date -u +%F)"
+          TAG="structured-data-${ARCHIVE_DATE}-${SHORT_SHA}"
+          ASSET="market-lens-structured-data-${ARCHIVE_DATE}-${SHORT_SHA}.zip"
+          mkdir -p dist
+          python archive/scripts/build_structured_archive.py \
+            --source source \
+            --output "dist/${ASSET}" \
+            --manifest-output dist/archive_manifest.json \
+            --source-repository AviramDahan/market-lens-scanner \
+            --source-commit "$SOURCE_SHA"
+          sha256sum "dist/${ASSET}" > "dist/${ASSET}.sha256"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: Publish immutable daily release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.build.outputs.tag }}
+          ASSET: ${{ steps.build.outputs.asset }}
+          SOURCE_SHA: ${{ steps.build.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to overwrite it."
+          else
+            gh release create "$TAG" \
+              "dist/${ASSET}" \
+              "dist/${ASSET}.sha256" \
+              dist/archive_manifest.json \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Market Lens Structured Data ${TAG#structured-data-}" \
+              --notes "Daily paper-trading structured-data backup from AviramDahan/market-lens-scanner commit ${SOURCE_SHA}. Charts and screenshots are excluded."
+          fi
+
+      - name: Record latest completed archive
+        env:
+          TAG: ${{ steps.build.outputs.tag }}
+          ASSET: ${{ steps.build.outputs.asset }}
+          SOURCE_SHA: ${{ steps.build.outputs.source_sha }}
+        shell: bash
+        working-directory: archive
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path("../dist/archive_manifest.json").read_text(encoding="utf-8"))
+          latest = {
+              "version": "market_lens_archive_pointer_v1",
+              "source_repository": manifest["source_repository"],
+              "source_commit": os.environ["SOURCE_SHA"],
+              "release_tag": os.environ["TAG"],
+              "asset": os.environ["ASSET"],
+              "created_at": manifest["created_at"],
+              "file_count": manifest["file_count"],
+              "total_bytes": manifest["total_bytes"],
+              "media_included": False,
+          }
+          Path("latest.json").write_text(json.dumps(latest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          git config user.name "market-lens-archive"
+          git config user.email "market-lens-archive@users.noreply.github.com"
+          git add latest.json
+          if git diff --cached --quiet; then
+            echo "Archive pointer is already current."
+            exit 0
+          fi
+          git commit -m "Record daily Market Lens structured archive [skip ci]"
+          git push origin HEAD:main
