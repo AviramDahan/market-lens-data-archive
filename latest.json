@@ -1,11 +1,11 @@
 {
-  "asset": "market-lens-structured-data-2026-09-30-871036cddded.zip",
-  "created_at": "2026-09-30T11:10:47.329076+00:00",
-  "file_count": 1407,
+  "asset": "market-lens-structured-data-2026-10-01-7b2199b3dbb1.zip",
+  "created_at": "2026-10-01T11:37:41.156518+00:00",
+  "file_count": 1549,
   "media_included": false,
-  "release_tag": "structured-data-2026-09-30-871036cddded",
-  "source_commit": "871036cddded693f856b195e2f34db13baedb419",
+  "release_tag": "structured-data-2026-10-01-7b2199b3dbb1",
+  "source_commit": "7b2199b3dbb164c39afe20b92ee098cd7d3b610a",
   "source_repository": "AviramDahan/market-lens-scanner",
-  "total_bytes": 464927680,
+  "total_bytes": 459255416,
   "version": "market_lens_archive_pointer_v1"
 }
